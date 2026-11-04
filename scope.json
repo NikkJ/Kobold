@@ -1,0 +1,74 @@
+{
+  "_escopo": "Relevante e qualquer mencao ao Brasil: origem (familias brasileiras ou operador brasileiro) OU alvo (isca em pt-BR, geofence BRA, infraestrutura .br, bancos brasileiros). Um Remcos com geofence para o Brasil entra; um Mispadu que tambem mira o Brasil entra.",
+
+  "families": [
+    "Grandoreiro", "Mekotio", "Casbaneiro", "Guildma", "Astaroth",
+    "Ousaban", "Mispadu", "Coyote", "Javali", "Amavaldo", "Vadokrist", "Zumanek"
+  ],
+
+  "aliases": {"Astaroth": "Guildma"},
+
+  "_comment_dormant": "Familia sem amostra ha mais de dormant_after_days (ou nunca reconhecida) e consultada so a cada dormant_check_every_days. O recent_detections continua cobrindo todas, todo dia.",
+  "dormant_after_days": 90,
+  "dormant_check_every_days": 7,
+
+  "threatfox_malware": ["win.grandoreiro", "win.mekotio", "win.metamorfo", "win.mispadu"],
+
+  "_comment_geo": "Tags de pais que o URLhaus usa para payloads com geofence (codigo de 3 letras).",
+  "urlhaus_geo_tags": ["BRA"],
+
+  "_comment_quota": "RAT vigiado sem nenhum sinal no nome: so os N mais recentes por dia sao consultados (amostra de controle). Na primeira semana, ~300 consultas nesse grupo nao trouxeram nenhum sinal.",
+  "watch_only_daily_quota": 10,
+  "pending_max_age_days": 3,
+
+  "watch_signatures": ["Remcos", "AsyncRAT", "XWorm", "SystemBC", "NjRAT", "QuasarRAT", "DCRat"],
+
+  "br_tags": ["bra", "brazil", "brasil", "br", "pt-br", "geo-br"],
+
+  "_comment_lures": "Iscas fortes so existem no Brasil: sozinhas ja levam a amostra para triagem, porque o escopo e qualquer mencao ao Brasil.",
+  "lure_terms": [
+    "boleto", "nota fiscal", "nfe", "nf e", "danfe", "pix", "comprovante",
+    "intimacao", "cnpj", "cpf", "segunda via", "2via", "detran", "receita federal", "irpf",
+    "nfse", "nfs e", "itau", "bradesco", "sicredi", "sicoob", "nubank"
+  ],
+
+  "_comment_pt": "Portugues (Brasil ou Portugal), nao espanhol: sozinhos levam para 'talvez', para voce revisar.",
+  "lure_terms_pt": [
+    "fatura", "faturas", "pagamento", "orcamento", "cotacao", "cobranca", "vencimento", "vencido",
+    "notificacao", "transferencia bancaria", "ted", "doc bancario", "extrato", "encomenda"
+  ],
+
+  "_comment_weak": "Portugues ou espanhol: sozinhos tambem vao para 'talvez' (limite 20), a menos que o nome tenha marca de outro idioma.",
+  "lure_terms_weak": [
+    "pedido", "recibo", "transferencia", "caixa", "convenio", "cobro"
+  ],
+
+  "_comment_hint": "Genericos no mundo todo: so ajudam somados a outro sinal.",
+  "lure_terms_hint": ["whatsapp"],
+
+  "_comment_other": "Marcas de espanhol ou italiano: tiram pontos de uma isca ambigua. So entram palavras que NAO existem em portugues: nada de abreviacoes ('justi' pode ser justificativa) nem palavras que o portugues tambem usa ('pago', 'abono'). Nao valem contra isca brasileira forte.",
+  "other_language_terms": [
+    "factura", "facturas", "fattura", "fatture", "justificante", "bonifico",
+    "comprobante", "cotizacion", "presupuesto", "solicitud", "remision", "remisiones",
+    "orden de compra", "nomina", "albaran", "ricevuta"
+  ],
+
+  "weights": {
+    "vendor_family": 50,
+    "br_tag": 40,
+    "lure_ptbr": 60,
+    "lure_pt": 40,
+    "lure_weak": 20,
+    "lure_hint": 10,
+    "accent_pt": 20,
+    "other_language": -30,
+    "br_infra": 25,
+    "urlhaus_geo": 20,
+    "origin_br": 10
+  },
+
+  "thresholds": {
+    "triage": 60,
+    "maybe": 20
+  }
+}

@@ -1,0 +1,4 @@
+﻿# Kobold has no third-party dependencies: collect.py uses only the Python standard library.
+# Requires Python 3.7 or newer.
+#
+# Add packages here (pinned, e.g. requests==2.32.3) only if a future module needs them.
