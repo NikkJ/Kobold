@@ -4,8 +4,9 @@ Kobold collector v0 (layers 1 and 2).
 
 Layer 1: family seeds (MalwareBazaar get_siginfo/get_taginfo, ThreatFox malwareinfo).
 Layer 2: recent_detections candidates, prefiltered and scored with get_info.
-URLhaus: family delivery URLs (tag and signature) and URLs geofenced to Brazil
-(BRA tag); payloads from those URLs become samples, and their hosts feed the clustering.
+URLhaus: family delivery URLs (tag and signature) and URLs geofenced to the target
+(e.g. BRA tag); payloads from those URLs become samples, and their hosts feed the clustering.
+The target country or region (Brazil by default) comes from the 'target' block of scope.json.
 Layer 3 (content) belongs to the agent triage, not here.
 
 Standard library only. Auth-Key in ABUSECH_AUTH_KEY.
@@ -462,20 +463,91 @@ def vendor_families(vendor_intel):
     return found
 
 
-BR_URL = re.compile(r"https?://[^\s\"'/]+\.br(?::\d+)?(?:/|\b)", re.I)
+# ---------------------------------------------------------------- target
 
-# MalwareBazaar reporters often tag domains with the dot replaced by a hyphen
-# (e.g. 'saladeouroriopreto-shop'). Heuristic: only matches when the tag ends in a known TLD.
-TLDS = ("com-br", "net-br", "org-br", "gov-br", "com", "net", "org", "br", "click", "shop", "xyz", "top",
-        "online", "site", "info", "store", "live", "app", "dev", "cloud", "icu", "lat", "vip", "sbs",
-        "cfd", "io", "me", "co", "ru", "biz", "cc", "pro", "life", "fun", "space", "website")
-INFRA_TAG = re.compile(r"^([a-z0-9][a-z0-9-]{2,})-(" + "|".join(re.escape(t) for t in TLDS) + r")$")
+# Generic TLDs often seen in domain tags; the target's ccTLDs are added on top of these.
+GENERIC_TLDS = ("com", "net", "org", "click", "shop", "xyz", "top", "online", "site", "info", "store", "live",
+                "app", "dev", "cloud", "icu", "lat", "vip", "sbs", "cfd", "io", "me", "co", "ru", "biz", "cc",
+                "pro", "life", "fun", "space", "website")
+
+
+class Target:
+    """The country or region Kobold tracks, read from the 'target' block of scope.json.
+
+    Without that block, the defaults reproduce the original Brazil setup, so older scope
+    files keep working. Every field is optional:
+      name                  label used in the console and in the summary
+      country               ISO 3166-1 alpha-2 code compared with origin_country (e.g. "BR")
+      cctlds                ccTLDs that count as local infrastructure (e.g. ["br"], ["pt"], ["co.uk"])
+      registry              where to check local domains before publishing (e.g. "registro.br")
+      geo_tags              URLhaus geofence tags, ISO alpha-3 (e.g. ["BRA"]); urlhaus_geo_tags overrides it
+      accent_regex          characters typical of the target language in file names
+      accent_exclude_regex  characters that cancel the accent signal (another language that shares it)
+    """
+
+    BRAZIL = {
+        "name": "Brazil",
+        "country": "BR",
+        "cctlds": ["br"],
+        "registry": "registro.br",
+        "geo_tags": ["BRA"],
+        # 'ã' and 'õ' exist in Portuguese but not in Spanish, Italian or French. Only ã/õ: 'ê', 'â'
+        # and 'ô' are also French and Vietnamese ('BIÊN LAI GIAO HÀNG' is Vietnamese). Vietnamese
+        # also uses ã/õ, but almost always together with its own letters (đ, ư, ơ, ạ, ấ...): if
+        # any of them is present, the accent does not count.
+        "accent_regex": "[ãõÃÕ]",
+        "accent_exclude_regex": "[đĐưƯơƠẠ-ỹ]",
+    }
+
+    def __init__(self, cfg=None):
+        cfg = self.BRAZIL if cfg is None else cfg
+        self.name = cfg.get("name") or cfg.get("country") or "target"
+        self.country = (cfg.get("country") or "").upper() or None
+        self.cctlds = sorted({t.lower().strip(".") for t in cfg.get("cctlds", []) if t.strip(".")},
+                             key=len, reverse=True)
+        self.registry = cfg.get("registry")
+        self.geo_tags = list(cfg.get("geo_tags", []))
+        self.accent = re.compile(cfg["accent_regex"]) if cfg.get("accent_regex") else None
+        self.accent_exclude = re.compile(cfg["accent_exclude_regex"]) if cfg.get("accent_exclude_regex") else None
+
+        alt = "|".join(re.escape(t) for t in self.cctlds)
+        self.url_rx = re.compile(r"https?://[^\s\"'/]+\.(?:%s)(?::\d+)?(?:/|\b)" % alt, re.I) if alt else None
+
+        # MalwareBazaar reporters often tag domains with the dot replaced by a hyphen
+        # (e.g. 'saladeouroriopreto-shop'). Heuristic: only matches when the tag ends in a known TLD.
+        local = []
+        for cc in self.cctlds:
+            dashed = cc.replace(".", "-")
+            local += [p + "-" + dashed for p in ("com", "net", "org", "gov", "edu")] + [dashed]
+        tlds = tuple(local) + GENERIC_TLDS
+        self.infra_tag = re.compile(r"^([a-z0-9][a-z0-9-]{2,})-(" + "|".join(re.escape(t) for t in tlds) + r")$")
+
+    def local_tld(self, host):
+        """The target ccTLD the host belongs to, or None."""
+        host = (host or "").lower().rstrip(".")
+        return next((t for t in self.cctlds if host.endswith("." + t)), None)
+
+    def is_local_host(self, host):
+        return self.local_tld(host) is not None
+
+    def has_accent(self, text):
+        """True when the text carries the target language accent. A missing accent says
+        nothing: file names usually come without accents."""
+        if not self.accent:
+            return False
+        text = text or ""
+        if self.accent_exclude and self.accent_exclude.search(text):
+            return False
+        return bool(self.accent.search(text))
+
+
+TARGET = Target()  # replaced in run() by the target of the scope file
 
 
 def infra_hints(tags):
     out = []
     for t in tags or []:
-        m = INFRA_TAG.match(str(t).lower())
+        m = TARGET.infra_tag.match(str(t).lower())
         if m:
             out.append(m.group(1) + "." + m.group(2).replace("-", "."))
     return sorted(set(out))
@@ -483,18 +555,32 @@ def infra_hints(tags):
 
 # ---------------------------------------------------------------- scoring
 
+# Weight names of the first, Brazil-only scope.json, mapped to the neutral ones.
+WEIGHT_ALIASES = {"br_tag": "target_tag", "br_infra": "target_infra", "origin_br": "origin_target",
+                  "lure_ptbr": "lure_strong", "lure_pt": "lure_language", "accent_pt": "accent"}
+
+
+def normalize_weights(weights):
+    w = dict(weights)
+    for old, new in WEIGHT_ALIASES.items():
+        if old in w and new not in w:
+            w[new] = w[old]
+    return w
+
+
 class Scorer:
     def __init__(self, scope):
         self.scope = scope
         self.families = {norm(f).replace(" ", "") for f in scope["families"]}
         self.watch = {norm(f).replace(" ", "") for f in scope["watch_signatures"]}
-        self.br_tags = {t.lower() for t in scope["br_tags"]}
+        # Neutral key names first; the Brazil-specific names of the first scope.json still work.
+        self.target_tags = {t.lower() for t in scope.get("target_tags", scope.get("br_tags", []))}
         self.lure = self._terms(scope["lure_terms"])
-        self.lure_pt = self._terms(scope.get("lure_terms_pt", []))
+        self.lure_lang = self._terms(scope.get("lure_terms_language", scope.get("lure_terms_pt", [])))
         self.lure_weak = self._terms(scope.get("lure_terms_weak", []))
         self.lure_hint = self._terms(scope.get("lure_terms_hint", []))
         self.other_lang = self._terms(scope.get("other_language_terms", []))
-        self.w = scope["weights"]
+        self.w = normalize_weights(scope["weights"])
         self.th = scope["thresholds"]
         self.aliases = {norm(k).replace(" ", ""): v for k, v in scope.get("aliases", {}).items()}
 
@@ -534,37 +620,32 @@ class Scorer:
         return m.group(1) if m else None
 
     def lure_level(self, file_name):
-        """Lure in the file name, from strongest to weakest:
-        br (exists only in Brazil), pt (Portuguese, BR or PT), weak (Portuguese or Spanish), hint."""
-        for level, rx in (("br", self.lure), ("pt", self.lure_pt), ("weak", self.lure_weak), ("hint", self.lure_hint)):
+        """Lure in the file name, from strongest to weakest: strong (exists only in the target,
+        e.g. NF-e for Brazil), language (the target language, also used elsewhere), weak (shared
+        with neighbouring languages), hint."""
+        for level, rx in (("strong", self.lure), ("language", self.lure_lang),
+                          ("weak", self.lure_weak), ("hint", self.lure_hint)):
             t = self._hit(rx, file_name)
             if t:
                 return level, t
         return None, None
 
     @staticmethod
-    def accent_pt(file_name):
-        """'ã' and 'õ' exist in Portuguese but not in Spanish, Italian or French.
-        Only ã/õ: 'ê', 'â', 'ô' are also French and Vietnamese ('BIÊN LAI GIAO HÀNG' is
-        Vietnamese). Vietnamese also uses ã/õ, but almost always together with its own letters
-        (đ, ư, ơ, ạ, ấ...): if any of them is present, it does not count.
-        A missing accent says nothing: file names usually come without accents."""
-        name = file_name or ""
-        if re.search(r"[đĐưƯơƠẠ-ỹ]", name):
-            return False
-        return bool(re.search(r"[ãõÃÕ]", name))
+    def accent_hit(file_name):
+        """Accent typical of the target language (see Target.has_accent)."""
+        return TARGET.has_accent(file_name)
 
     def tag_hit(self, tags):
-        return [t for t in (tags or []) if str(t).lower() in self.br_tags]
+        return [t for t in (tags or []) if str(t).lower() in self.target_tags]
 
     def priority(self, s):
-        """Order for spending the get_info budget: visible Brazilian signal first."""
+        """Order for spending the get_info budget: visible target signal first."""
         name = s.get("file_name") or ""
         level, _ = self.lure_level(name)
-        p = {"br": 100, "pt": 75, "weak": 50, "hint": 20}.get(level, 0)
-        if self.accent_pt(name):
+        p = {"strong": 100, "language": 75, "weak": 50, "hint": 20}.get(level, 0)
+        if self.accent_hit(name):
             p += 30
-        if self._hit(self.other_lang, name) and level != "br":
+        if self._hit(self.other_lang, name) and level != "strong":
             p -= 30  # lure clearly in Spanish or Italian: goes to the back of the queue
         if self.tag_hit(s.get("tags")):
             p += 40
@@ -575,7 +656,7 @@ class Scorer:
     def prefilter(self, s):
         """Decides whether this candidate is worth a get_info call."""
         name = s.get("file_name")
-        return bool(self.lure_level(name)[0] or self.accent_pt(name)
+        return bool(self.lure_level(name)[0] or self.accent_hit(name)
                     or self.is_watched(s.get("signature")) or self.is_family(s.get("signature")))
 
     def lure_points(self, text):
@@ -583,26 +664,26 @@ class Scorer:
         pts, why = 0, []
         level, term = self.lure_level(text)
         if level:
-            key = {"br": "lure_ptbr", "pt": "lure_pt", "weak": "lure_weak", "hint": "lure_hint"}[level]
+            key = {"strong": "lure_strong", "language": "lure_language", "weak": "lure_weak", "hint": "lure_hint"}[level]
             pts += self.w.get(key, 0); why.append("%s:%s" % (key, term))
-        if self.accent_pt(text):
-            pts += self.w.get("accent_pt", 20); why.append("accent_pt")
+        if self.accent_hit(text):
+            pts += self.w.get("accent", 20); why.append("accent")
         other = self._hit(self.other_lang, text)
-        if other and level != "br":
-            # 'factura', 'bonifico', 'justificante'...: the lure is in another language, not Brazilian
+        if other and level != "strong":
+            # 'factura', 'bonifico', 'justificante'...: the lure is in another language, not the target's
             pts += self.w.get("other_language", -30); why.append("other_language:" + other)
         return pts, why
 
     def score_url(self, url):
-        """Brazilian signal in the URL itself: .br host and lures in the host and path."""
+        """Target signal in the URL itself: a host under a target ccTLD and lures in the host and path."""
         try:
             parts = urllib.parse.urlsplit(url)
             text = urllib.parse.unquote(parts.netloc + " " + parts.path + " " + parts.query)
         except ValueError:
             return 0, []
         pts, why = self.lure_points(text)
-        if host_of(url).endswith(".br"):
-            pts += self.w["br_infra"]; why.append("host_br")
+        if TARGET.is_local_host(host_of(url)):
+            pts += self.w["target_infra"]; why.append("target_host")
         return pts, why
 
     def score(self, info):
@@ -612,14 +693,14 @@ class Scorer:
             pts += self.w["vendor_family"]; why.append("vendor_family:" + ",".join(sorted(fams)))
         tags = self.tag_hit(info.get("tags"))
         if tags:
-            pts += self.w["br_tag"]; why.append("br_tag:" + ",".join(tags))
+            pts += self.w["target_tag"]; why.append("target_tag:" + ",".join(tags))
         p, w = self.lure_points(info.get("file_name"))
         pts += p; why += w
-        if BR_URL.search(json.dumps(info, ensure_ascii=False)) or any(
-                h.endswith(".br") for h in infra_hints(info.get("tags"))):
-            pts += self.w["br_infra"]; why.append("br_infra")
-        if (info.get("origin_country") or "").upper() == "BR":
-            pts += self.w["origin_br"]; why.append("origin_br")
+        if (TARGET.url_rx and TARGET.url_rx.search(json.dumps(info, ensure_ascii=False))) or any(
+                TARGET.is_local_host(h) for h in infra_hints(info.get("tags"))):
+            pts += self.w["target_infra"]; why.append("target_infra")
+        if TARGET.country and (info.get("origin_country") or "").upper() == TARGET.country:
+            pts += self.w["origin_target"]; why.append("origin_target")
         return pts, (why or ["no_signal"])
 
     def decide(self, pts):
@@ -660,8 +741,9 @@ def record(s, decision, score, why, layer):
 
 
 def run(args):
-    global SC
+    global SC, TARGET
     scope = json.loads(Path(args.scope).read_text(encoding="utf-8"))
+    TARGET = Target(scope.get("target"))
     sc = SC = Scorer(scope)
     now = parse_ts(args.now) if args.now else datetime.now(timezone.utc)
     cutoff = now - parse_since(args.since)
@@ -796,9 +878,9 @@ def run(args):
     stats["recent"] = len(recent)
 
     # Samples WITHOUT a family label do not show up in recent_detections. To avoid missing the
-    # Brazilian first-stage downloader that arrives unsigned (VBS, JS, MSI), the MalwareBazaar
+    # first-stage downloader that arrives unsigned (VBS, JS, MSI), the MalwareBazaar
     # 'recent' export (48 h, labeled and unlabeled) is downloaded at most once an hour and
-    # filtered here by file name. No extra query per sample: only the ones with a Brazilian
+    # filtered here by file name. No extra query per sample: only the ones with a target
     # signal in the name enter the get_info queue.
     export_cands = []
     if not args.no_mb_export:
@@ -825,7 +907,7 @@ def run(args):
                     if not in_window(x):
                         continue
                     mbx["in_window"] += 1
-                    if sc.is_family(x["signature"]) or sc.lure_level(x["file_name"])[0] or sc.accent_pt(x["file_name"]):
+                    if sc.is_family(x["signature"]) or sc.lure_level(x["file_name"])[0] or sc.accent_hit(x["file_name"]):
                         x["_src"] = "mb_export"
                         export_cands.append(x)
                 mbx["with_signal"] = len(export_cands)
@@ -880,16 +962,16 @@ def run(args):
             continue
         candidates[h] = s
 
-    # The get_info budget goes first to candidates that already show a Brazilian signal in the
+    # The get_info budget goes first to candidates that already show a target signal in the
     # name or tags. On the first real run, 150 queries went to RATs whose file name was the hash,
     # while 'DANFE-NFe...' and 'Pedido.vbs' were never queried.
     #
     # Watched RAT with no signal in the name (no lure, no accent, no tag): in the first real week,
-    # ~300 queries in this group brought no Brazilian signal at all. A small daily quota remains
+    # ~300 queries in this group brought no target signal at all. A small daily quota remains
     # as a control sample (the most recent ones); the rest is dropped without a query, with its
     # own reason, and is counted in the summary.
     def name_signal(s):
-        return bool(sc.lure_level(s.get("file_name"))[0] or sc.accent_pt(s.get("file_name"))
+        return bool(sc.lure_level(s.get("file_name"))[0] or sc.accent_hit(s.get("file_name"))
                     or sc.tag_hit(s.get("tags")) or s.get("_src") == "mb_export")
 
     with_signal = [s for s in candidates.values() if name_signal(s)]
@@ -997,16 +1079,16 @@ def run(args):
                 pts, why = sc.score(s)
                 why = [w for w in why if w != "no_signal"]
                 if why_extra == "urlhaus_geo":
-                    # A geofence to Brazil is an explicit Brazilian target: in scope by definition.
+                    # A geofence to the target is explicit targeting: in scope by definition.
                     pts += sc.w.get("urlhaus_geo", 20)
                 if rec.get("url_score", 0) > 0:
-                    # The URL that delivered the file already had a Brazilian signal (.br host, lure in the path):
+                    # The URL that delivered the file already had a target signal (local ccTLD host, lure in the path):
                     # the payload inherits those points, without double counting what came from the file name.
                     extra = [w for w in rec["url_why"] if w not in why]
                     if len(extra) == len(rec["url_why"]):
                         pts += rec["url_score"]           # nothing in common with the file name
-                    elif "host_br" in extra:
-                        pts += sc.w["br_infra"]           # the lure already counted; only the .br host is new
+                    elif "target_host" in extra:
+                        pts += sc.w["target_infra"]       # the lure already counted; only the local host is new
                     why += ["url:" + w for w in extra]
                 new = record(s, sc.decide(pts), pts, why + [why_extra], 2)
             new["delivery_hosts"] = [rec["host"]] if rec["host"] else []
@@ -1017,7 +1099,7 @@ def run(args):
         # last 30 days, regenerated every 5 min), downloaded at most once an hour and filtered
         # here by tag. One request replaces the ~37 tag queries without losing anything.
         # If the export fails, fall back to tag queries, as before.
-        geo_tags = {t.lower(): t for t in scope.get("urlhaus_geo_tags", ["BRA"])}
+        geo_tags = {t.lower(): t for t in scope.get("urlhaus_geo_tags", TARGET.geo_tags)}
         fam_by_tag = {f.lower(): f for f in scope["families"]}
         export_rows = None
         if not args.urlhaus_by_tag:
@@ -1072,7 +1154,7 @@ def run(args):
                 if geo:
                     add_url(u, "geo:" + geo)
                 if not fam and not geo and in_win:
-                    # No useful tag: look for a Brazilian signal in the URL itself (.br host, lures in
+                    # No useful tag: look for a target signal in the URL itself (local ccTLD host, lures in
                     # the path). Done here, on the export already downloaded: no extra call.
                     pts, _ = sc.score_url(u.get("url") or "")
                     if pts >= sc.th["maybe"]:
@@ -1086,7 +1168,7 @@ def run(args):
                 for tag in sorted({fam, fam.lower()}):
                     uh_queries.append(("tag", tag, fam))
                 uh_queries.append(("signature", fam, fam))
-            for tag in scope.get("urlhaus_geo_tags", ["BRA"]):
+            for tag in scope.get("urlhaus_geo_tags", TARGET.geo_tags):
                 uh_queries.append(("geo", tag, None))
         uh_resp = fetch_all(
             lambda q: client.uh("signature" if q[0] == "signature" else "tag",
@@ -1106,7 +1188,7 @@ def run(args):
 
         # 3. For URLs with no known payload, ask what they served (capped).
         # Short cache (1 day): the online/offline status changes quickly.
-        # Order: family and geofence first, then the URLs with the most Brazilian signal in the address.
+        # Order: family and geofence first, then the URLs with the most target signal in the address.
         def url_priority(rec):
             strong = any(s.startswith(("tag:", "geo:", "signature:")) for s in rec["sources"])
             return (0 if strong else 1, -rec.get("url_score", 0))
@@ -1223,7 +1305,8 @@ def run(args):
     for rec in results.values():
         by[rec["decision"]].append(rec)
 
-    print("Kobold collector | window: %s to %s UTC" % (cutoff.strftime(TS_FMT), now.strftime(TS_FMT)))
+    print("Kobold collector | target: %s | window: %s to %s UTC" % (
+        TARGET.name, cutoff.strftime(TS_FMT), now.strftime(TS_FMT)))
     print("  triage: %d | maybe: %d | dropped: %d | ThreatFox IOCs: %d" % (
         len(by["triage"]), len(by["maybe"]), len(by["drop"]), len(iocs)))
     print("  recent_detections received: %d | get_info: %d (%d from cache) | seeds outside the window: %d | already seen: %d" % (
@@ -1231,7 +1314,7 @@ def run(args):
     mbx = stats.get("mb_export")
     if mbx and mbx.get("rows"):
         print("  MalwareBazaar export (48 h): %d samples (%s to %s) | %d unlabeled | %d in window | "
-              "%d with BR signal in the name -> get_info queue" % (
+              "%d with target signal in the name -> get_info queue" % (
                   mbx["rows"], mbx.get("from"), mbx.get("to"), mbx["unlabeled"], mbx["in_window"], mbx["with_signal"]))
     if stats.get("families_skipped"):
         print("  dormant families not queried today (once a week; recent_detections covers them): "
@@ -1244,7 +1327,7 @@ def run(args):
         print("  query queue: %d carried over from the previous run | %d expired | %d left for the next one (pending.json)" % (
             stats.get("pending_prev", 0), stats.get("pending_expired", 0), stats.get("pending", 0)))
     if not args.no_urlhaus:
-        print("  URLhaus (%s): %d family URLs | %d with BR geofence | %d with BR signal in the URL | "
+        print("  URLhaus (%s): %d family URLs | %d with target geofence | %d with target signal in the URL | "
               "URL lookups: %d%s | new payloads: %d" % (
             uh.get("mode", "-"), uh["family_urls"], uh["geo_urls"], uh["signal_urls"], uh["url_info"],
             (" (%d left for the next run)" % uh["info_skipped"]) if uh["info_skipped"] else "", uh["payloads_new"]))
@@ -1279,7 +1362,7 @@ def run(args):
             print("  [drop  ] %3s  %-34s %-12s %s" % (
                 rec["score"], (rec["file_name"] or "")[:34], (rec["signature"] or "-")[:12], " ".join(rec["why"])))
         if nosig:
-            print("  queried with no Brazilian signal: %d (most common: %s)" % (len(nosig), top_sigs(nosig)))
+            print("  queried with no target signal: %d (most common: %s)" % (len(nosig), top_sigs(nosig)))
         if pre:
             print("  prefilter dropped %d without a query (most common: %s)" % (len(pre), top_sigs(pre)))
     clusters = infra_clusters(by["triage"] + by["maybe"], urls.values())
@@ -1296,7 +1379,7 @@ def run(args):
     review = host_review(by["triage"] + by["maybe"], urls.values())
     if review:
         (out / ("hosts_%s.json" % day)).write_text(json.dumps(review, ensure_ascii=False, indent=2), encoding="utf-8")
-        sensitive = [e for e in review if e["kind"] in ("compromised_cms", "br_domain", "verify")]
+        sensitive = [e for e in review if e["kind"] in ("compromised_cms", "target_domain", "verify")]
         print("  delivery and infra hosts (%d total, %d need review before publishing):" % (len(review), len(sensitive)))
         for e in review[:40]:
             mark = "!" if e in sensitive else " "
@@ -1321,6 +1404,7 @@ def run(args):
             k = r["signature"] or "-"
             prefilter_by_sig[k] = prefilter_by_sig.get(k, 0) + 1
     summary = {
+        "target": TARGET.name,
         "window": {"from": cutoff.strftime(TS_FMT), "to": now.strftime(TS_FMT)},
         "counts": {"triage": len(by["triage"]), "maybe": len(by["maybe"]),
                    "drops_queried": sum(1 for r in by["drop"] if r["why"] not in NOT_CONSULTED),
@@ -1398,7 +1482,7 @@ CMS_PATH = re.compile(r"/(wp-content|wp-includes|wp-admin|administrator|componen
                       r"plugins|themes|images/stories)/", re.I)
 
 # Display order: what needs the most care before publishing comes first.
-HOST_KINDS = ["compromised_cms", "br_domain", "verify", "disposable_tld", "ip", "platform", "unknown"]
+HOST_KINDS = ["compromised_cms", "target_domain", "verify", "disposable_tld", "ip", "platform", "unknown"]
 
 
 def classify_host(host, url=""):
@@ -1412,8 +1496,10 @@ def classify_host(host, url=""):
     path = urllib.parse.urlsplit(url).path if url else ""
     if CMS_PATH.search(path):
         return "compromised_cms", "CMS path (e.g. wp-content): likely a hacked legitimate site"
-    if host.endswith(".br"):
-        return "br_domain", ".br domain: check registro.br for a real company before publishing"
+    tld = TARGET.local_tld(host)
+    if tld:
+        return "target_domain", ".%s domain: check %s for a real company before publishing" % (
+            tld, TARGET.registry or "the national registry")
     if host.rsplit(".", 1)[-1] in CHEAP_TLDS:
         return "disposable_tld", "cheap TLD, common in operator-registered infrastructure"
     return "verify", "regular domain: may be a hacked real company or registered by the operator"
