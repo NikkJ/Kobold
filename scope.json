@@ -1,5 +1,16 @@
 {
-  "_escopo": "Relevante e qualquer mencao ao Brasil: origem (familias brasileiras ou operador brasileiro) OU alvo (isca em pt-BR, geofence BRA, infraestrutura .br, bancos brasileiros). Um Remcos com geofence para o Brasil entra; um Mispadu que tambem mira o Brasil entra.",
+  "_scope": "Anything that touches Brazil is relevant: origin (Brazilian families or a Brazilian operator) OR target (pt-BR lure, BRA geofence, .br infrastructure, Brazilian banks). A Remcos geofenced to Brazil is in; a Mispadu that also targets Brazil is in.",
+
+  "_comment_target": "The country being tracked. country is ISO alpha-2, geo_tags are the URLhaus geofence tags (ISO alpha-3). The accent regex flags 'ã' and 'õ', which exist in Portuguese but not in Spanish, Italian or French; the exclude regex cancels it for Vietnamese, which also uses them.",
+  "target": {
+    "name": "Brazil",
+    "country": "BR",
+    "cctlds": ["br"],
+    "registry": "registro.br",
+    "geo_tags": ["BRA"],
+    "accent_regex": "[ãõÃÕ]",
+    "accent_exclude_regex": "[đĐưƯơƠẠ-ỹ]"
+  },
 
   "families": [
     "Grandoreiro", "Mekotio", "Casbaneiro", "Guildma", "Astaroth",
@@ -8,45 +19,42 @@
 
   "aliases": {"Astaroth": "Guildma"},
 
-  "_comment_dormant": "Familia sem amostra ha mais de dormant_after_days (ou nunca reconhecida) e consultada so a cada dormant_check_every_days. O recent_detections continua cobrindo todas, todo dia.",
+  "_comment_dormant": "A family with no sample for more than dormant_after_days (or never recognized) is queried only every dormant_check_every_days. recent_detections still covers all of them every day.",
   "dormant_after_days": 90,
   "dormant_check_every_days": 7,
 
   "threatfox_malware": ["win.grandoreiro", "win.mekotio", "win.metamorfo", "win.mispadu"],
 
-  "_comment_geo": "Tags de pais que o URLhaus usa para payloads com geofence (codigo de 3 letras).",
-  "urlhaus_geo_tags": ["BRA"],
-
-  "_comment_quota": "RAT vigiado sem nenhum sinal no nome: so os N mais recentes por dia sao consultados (amostra de controle). Na primeira semana, ~300 consultas nesse grupo nao trouxeram nenhum sinal.",
+  "_comment_quota": "Watched RAT with no signal in the name: only the N most recent per day are queried (control sample). In the first week, ~300 queries in this group brought no signal at all.",
   "watch_only_daily_quota": 10,
   "pending_max_age_days": 3,
 
   "watch_signatures": ["Remcos", "AsyncRAT", "XWorm", "SystemBC", "NjRAT", "QuasarRAT", "DCRat"],
 
-  "br_tags": ["bra", "brazil", "brasil", "br", "pt-br", "geo-br"],
+  "target_tags": ["bra", "brazil", "brasil", "br", "pt-br", "geo-br"],
 
-  "_comment_lures": "Iscas fortes so existem no Brasil: sozinhas ja levam a amostra para triagem, porque o escopo e qualquer mencao ao Brasil.",
+  "_comment_lures": "Strong lures only exist in Brazil: on their own they already send the sample to triage, because the scope is any mention of Brazil.",
   "lure_terms": [
     "boleto", "nota fiscal", "nfe", "nf e", "danfe", "pix", "comprovante",
     "intimacao", "cnpj", "cpf", "segunda via", "2via", "detran", "receita federal", "irpf",
     "nfse", "nfs e", "itau", "bradesco", "sicredi", "sicoob", "nubank"
   ],
 
-  "_comment_pt": "Portugues (Brasil ou Portugal), nao espanhol: sozinhos levam para 'talvez', para voce revisar.",
-  "lure_terms_pt": [
+  "_comment_language": "Portuguese (Brazil or Portugal), not Spanish: on their own they send the sample to 'maybe', for you to review.",
+  "lure_terms_language": [
     "fatura", "faturas", "pagamento", "orcamento", "cotacao", "cobranca", "vencimento", "vencido",
     "notificacao", "transferencia bancaria", "ted", "doc bancario", "extrato", "encomenda"
   ],
 
-  "_comment_weak": "Portugues ou espanhol: sozinhos tambem vao para 'talvez' (limite 20), a menos que o nome tenha marca de outro idioma.",
+  "_comment_weak": "Portuguese or Spanish: on their own they also go to 'maybe' (threshold 20), unless the name carries a mark of another language.",
   "lure_terms_weak": [
     "pedido", "recibo", "transferencia", "caixa", "convenio", "cobro"
   ],
 
-  "_comment_hint": "Genericos no mundo todo: so ajudam somados a outro sinal.",
+  "_comment_hint": "Generic worldwide: they only help when added to another signal.",
   "lure_terms_hint": ["whatsapp"],
 
-  "_comment_other": "Marcas de espanhol ou italiano: tiram pontos de uma isca ambigua. So entram palavras que NAO existem em portugues: nada de abreviacoes ('justi' pode ser justificativa) nem palavras que o portugues tambem usa ('pago', 'abono'). Nao valem contra isca brasileira forte.",
+  "_comment_other": "Spanish or Italian marks: they remove points from an ambiguous lure. Only words that do NOT exist in Portuguese: no abbreviations ('justi' could be justificativa) and no words Portuguese also uses ('pago', 'abono'). They do not count against a strong Brazilian lure.",
   "other_language_terms": [
     "factura", "facturas", "fattura", "fatture", "justificante", "bonifico",
     "comprobante", "cotizacion", "presupuesto", "solicitud", "remision", "remisiones",
@@ -55,16 +63,16 @@
 
   "weights": {
     "vendor_family": 50,
-    "br_tag": 40,
-    "lure_ptbr": 60,
-    "lure_pt": 40,
+    "target_tag": 40,
+    "lure_strong": 60,
+    "lure_language": 40,
     "lure_weak": 20,
     "lure_hint": 10,
-    "accent_pt": 20,
+    "accent": 20,
     "other_language": -30,
-    "br_infra": 25,
+    "target_infra": 25,
     "urlhaus_geo": 20,
-    "origin_br": 10
+    "origin_target": 10
   },
 
   "thresholds": {
