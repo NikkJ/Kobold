@@ -68,8 +68,8 @@ the code. Every record keeps the list of reasons (`why`) behind its score.
 ## Setup
 
 ```bash
-git clone https://github.com/<your-user>/kobold.git
-cd kobold
+git clone https://github.com/NikkJ/Kobold.git
+cd Kobold
 ```
 
 Set the Auth-Key as an environment variable.
@@ -225,4 +225,4 @@ malware. Use it in accordance with the abuse.ch terms of service.
 
 ## License
 
-To be defined.
+MIT
